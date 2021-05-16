@@ -31,5 +31,5 @@ This script was tested using Python 3.8.5
 This package requires some third-party-packages, which can be installed via pip using this command:
 
 ```
-pip install python-tk, napari, pandas, matplotlib, numpy, scipy
+pip install python-tk napari pandas matplotlib numpy scipy
 ```
