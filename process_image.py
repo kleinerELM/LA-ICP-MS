@@ -34,6 +34,8 @@ def getBaseSettings():
         # interpolate lines between the lines in x direction (linear interpolation)
         "stretch_x"            : 6,
         "load_raw"             : False,
+        # extracted from a SEM image
+        "spot_distance_x"      : 7.0,
         # extracted from the xlsx - is it constant?
         "spot_distance_y"      : 0.579150579150579
     }
@@ -81,7 +83,7 @@ class LA_ICP_MS_LOADER:
     np_images   = {}
     elements    = {}
     element_max = {} # max value in the data
-    colormaps   = ["red" , "green", "blue", "yellow", "magenta", "cyan", "bop blue", "bop orange", "bop purple", "magma",  "gray"]
+    colormaps   = ["red" , "green", "blue", "yellow", "magenta", "cyan", "bop blue", "bop orange", "bop purple"]
     superscript_numbers = [ "\u2070", "\u00b9","\u00b2","\u00b3","\u2074","\u2075","\u2076","\u2077","\u2078", "\u2079" ]
     illegal_columns = ['ID', 'ID03', 'mp', 'µm', 'Time in Seconds '] + ['TB'] # TB contains some image data - but I do not know what exactly
 
@@ -144,7 +146,7 @@ class LA_ICP_MS_LOADER:
 
         for element in self.elements.keys():
             if not element in self.images: self.images[element] = []
-            if settings["smooth_y"] > 0:
+            if self.settings["smooth_y"] > 0:
                 self.images[element].append( gaussian_filter1d(line_data[element].tolist(), self.settings["smooth_y"]) )
             else:
                 self.images[element].append( line_data[element].tolist() )
@@ -228,6 +230,10 @@ class LA_ICP_MS_LOADER:
 
         self.pre_processed_images()
 
+        if len(self.colormaps) < len(self.elements):
+            for i in range( len(self.elements)-len(self.colormaps) ):
+                self.colormaps.append("gray")
+
         with napari.gui_qt():
             viewer = napari.Viewer()
             for i, element in enumerate(selected_elements):
@@ -263,7 +269,7 @@ class LA_ICP_MS_LOADER:
 
         if os.path.isdir( self.settings["workingDirectory"] ) :
             self.spot_distance_y = self.settings["spot_distance_y"]
-            self.spot_distance_x = 7/(self.settings["stretch_x"] + 1)
+            self.spot_distance_x = self.settings["spot_distance_x"]/(self.settings["stretch_x"] + 1)
             # set basic variables containing all elements and their respective colors in the napari editor
             self.scaling = (self.spot_distance_y, self.spot_distance_x)
 
