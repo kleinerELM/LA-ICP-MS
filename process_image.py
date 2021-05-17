@@ -5,6 +5,7 @@ import os, sys, re, napari, getopt
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
 import tkinter as tk
@@ -83,7 +84,8 @@ class LA_ICP_MS_LOADER:
     np_images   = {}
     elements    = {}
     element_max = {} # max value in the data
-    colormaps   = ["red" , "green", "blue", "yellow", "magenta", "cyan", "bop blue", "bop orange", "bop purple"]
+    colormaps_napari = ['red', 'green', 'blue', 'cyan', 'magenta', 'yellow', "bop blue", "bop orange", "bop purple"]
+    colormaps        = [(255,0,0) , (0,255,0), (0,0,255), (0,255,255), (255,0,255), (255,255,0), (255, 204, 18), (18, 255, 247), (0, 255, 145)]
     superscript_numbers = [ "\u2070", "\u00b9","\u00b2","\u00b3","\u2074","\u2075","\u2076","\u2077","\u2078", "\u2079" ]
     illegal_columns = ['ID', 'ID03', 'mp', 'µm', 'Time in Seconds '] + ['TB'] # TB contains some image data - but I do not know what exactly
 
@@ -215,6 +217,25 @@ class LA_ICP_MS_LOADER:
             for element in self.elements.keys():
                 self.np_images[element], self.element_max[element] = self.optimize_img( self.images[element] )
 
+    def get_color_by_element(self, element, napari_cmap=True):
+
+        i = list(self.elements.keys()).index(element)
+
+        if len(self.colormaps) < len(self.elements):
+            for i in range( len(self.elements)-len(self.colormaps) ):
+                self.colormaps.append((255,255,255))
+                self.colormaps_napari.append('gray')
+
+        if napari_cmap:
+            cmap = self.colormaps_napari[i]
+        else:
+            c = (self.colormaps[i][0]/255, self.colormaps[i][1]/255, self.colormaps[i][2]/255)
+            colors = [(0, 0, 0), c] # first color is black, last is color (r, g, b)
+            cmap = LinearSegmentedColormap.from_list(element, colors, N=256)
+
+        return cmap
+
+
     # selected_elements has to be a list of elements contained in the data.
     # e.g.: ['Na23', 'Mg24', 'Al27', 'K39']
     def show_image_set( self, selected_elements = [] ):
@@ -230,14 +251,10 @@ class LA_ICP_MS_LOADER:
 
         self.pre_processed_images()
 
-        if len(self.colormaps) < len(self.elements):
-            for i in range( len(self.elements)-len(self.colormaps) ):
-                self.colormaps.append("gray")
-
         with napari.gui_qt():
             viewer = napari.Viewer()
             for i, element in enumerate(selected_elements):
-                new_layer = viewer.add_image(self.np_images[element], name='LA-ICP-MS [{}]'.format(self.elements[element]), scale=self.scaling, colormap=self.colormaps[i], opacity=1/len(selected_elements), blending="additive", rendering="iso")
+                new_layer = viewer.add_image(self.np_images[element], name='LA-ICP-MS [{}]'.format(self.elements[element]), scale=self.scaling, colormap=self.get_color_by_element(element), opacity=1/len(selected_elements), blending="additive", rendering="iso")
             viewer.scale_bar.visible = True
 
     def __init__( self, settings ):
