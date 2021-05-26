@@ -8,8 +8,12 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import interp1d
+from skimage.filters import sobel, threshold_multiotsu
+from skimage.segmentation import slic, watershed, mark_boundaries
+from skimage import color
 import tkinter as tk
 from tkinter import filedialog
+from molmass import Formula as form
 
 def programInfo():
     print("#########################################################")
@@ -78,16 +82,55 @@ def processArguments():
     print( '' )
     return settings
 
+# returns the mass portion of the relevant element
+# e.g.: Al2O3 -> 2*m[Al] / m[Al2O3]
+def get_oxide_portion( formula ):
+    oxide = form(formula)
+    for symbol in oxide._elements:
+        if symbol != 'O':
+            return form(symbol).mass*oxide._elements[symbol][0] / oxide.mass
+            break
+
+# extracting only the element symbol
+def get_element_from_isotope( isotope ):
+    return re.split('(\d+)', isotope)[0]
 
 class LA_ICP_MS_LOADER:
-    images      = {}
-    np_images   = {}
-    elements    = {}
+    elements    = {} # list of elements in the raw data
+    images      = {} # raw signal data
+    np_images   = {} # data as np images with a value range from 0-1
+    cal_img_ppm = {} # image data calbirated as ppm
+    cal_img_mpo = {} # image data calbirated as m.-% oxide
     element_max = {} # max value in the data
-    colormaps_napari = ['red', 'green', 'blue', 'cyan', 'magenta', 'yellow', "bop blue", "bop orange", "bop purple"]
-    colormaps        = [(255,0,0) , (0,255,0), (0,0,255), (0,255,255), (255,0,255), (255,255,0), (255, 204, 18), (18, 255, 247), (0, 255, 145)]
-    superscript_numbers = [ "\u2070", "\u00b9","\u00b2","\u00b3","\u2074","\u2075","\u2076","\u2077","\u2078", "\u2079" ]
+    unit = 'µm'      # unit of the pixel dimensions
+
+    # known oxides
+    oxide_dict = {
+        'Na': 'Na2O',
+        'Mg': 'MgO',
+        'Al': 'Al2O3',
+        'K' : 'K2O',
+        'Ti': 'TiO2',
+        'V' : 'V2O5',
+        'Cr': 'Cr2O3',
+        'Mn': 'MnO2',
+        'Zn': 'ZnO',
+        'Rb': 'Rb2O',
+        'Ba': 'BaO',
+        'Ca': 'CaO',
+        'Sr': 'SrO',
+        'P' : 'P4O6',
+        'Cu': 'CuO',
+        'Ni': 'NiO',
+        'Pb': 'PbO',
+        'As': 'As2O3'
+    }
+
     illegal_columns = ['ID', 'ID03', 'mp', 'µm', 'Time in Seconds '] + ['TB'] # TB contains some image data - but I do not know what exactly
+    colormaps_napari    = ['red', 'green', 'blue', 'cyan', 'magenta', 'yellow', "bop blue", "bop orange", "bop purple"]
+    colormaps           = [(255,0,0) , (0,255,0), (0,0,255), (0,255,255), (255,0,255), (255,255,0), (255, 204, 18), (18, 255, 247), (0, 255, 145)]
+    superscript_numbers = [ "\u2070", "\u00b9","\u00b2","\u00b3","\u2074","\u2075","\u2076","\u2077","\u2078", "\u2079" ]
+    subscript_numbers   = [ "\u2080", "\u2081","\u2082","\u2083","\u2084","\u2085","\u2086","\u2087","\u2088", "\u2089" ]
 
     def get_first_element(self):
         return list(self.elements.keys())[0]
@@ -99,7 +142,7 @@ class LA_ICP_MS_LOADER:
             for c in self.illegal_columns:
                 if c in columns: columns.remove(c)
             for p, element in enumerate(columns):
-                e = re.split('(\d+)',element)
+                e = re.split('(\d+)', element) # get_element_from_isotope does not work here.
                 if len(e) == 3:
                     i = ""
                     for n in e[1]:
@@ -108,9 +151,51 @@ class LA_ICP_MS_LOADER:
                 else:
                     self.elements[element] = element
 
+    def get_oxide_conc_factor( self, isotope ):
+        # Masseanteil am Oxide
+        # zb Anteil von Na an Na2O
+        selected_oxide = self.oxide_dict[ get_element_from_isotope( isotope ) ]
+        return get_oxide_portion(selected_oxide)*self.cal_dict[isotope]*1000000
+
+    # use the calibration matrix to get an 2D array with calibrated values for:
+    #  mpo = mass-%-oxide
+    #  ppm = parts per million
+    def use_calibration( self, value, element, ppm_mpo='ppm' ):
+        if self.cal_dict is None: self.set_calibration_dictionary()
+        if ppm_mpo == 'ppm':
+            calibrated_value = value/self.cal_dict[element]
+            #calibrated_value = round( calibrated_value )
+        else:
+            calibrated_value = (value/self.get_oxide_conc_factor( element ))*100
+
+        return calibrated_value
+
+    # set the calibration dictionary
+    def set_calibration_dictionary( self, cal_dict = None ):
+        if not isinstance(cal_dict, dict):
+            print("\"cal_dict\" is expected to be an dictionary. E.g.: \{'Na': 1.337, 'K': 0.123\}")
+        if cal_dict is None or not isinstance(cal_dict, dict):
+            print('Warning: Data is not calibrated! Please add a calibration dictionary to process the correct chemical composition.')
+            # filling the dictionary with dummy data
+            cal_dict = {}
+            for isotope in self.elements.keys():
+                cal_dict[isotope] = 1.0
+        else:
+            for isotope in self.elements.keys():
+                if not isotope in cal_dict:
+                    print('Warning: {} is missing in cal_dict but exists in the raw data!'.format(self.elements[isotope]))
+                    cal_dict[isotope] = 1.0
+
+        for isotope in cal_dict:
+            if not get_element_from_isotope( isotope ) in self.oxide_dict:
+                print( 'Warning: The oxide of {} is not known! Please edit "process_image.py" first and add the oxide to the "oxide_dict" dictionary.' )
+                cal_dict.pop( isotope )
+
+        self.cal_dict = cal_dict
+
+
     # interpolate lines in x-direction
     def strech_img(self, img, stretch_x=None):
-
         if stretch_x is None: stretch_x = self.settings["stretch_x"]
 
         _, j = img.shape
@@ -235,6 +320,13 @@ class LA_ICP_MS_LOADER:
 
         return cmap
 
+    def get_calibrated_images(self, element):
+        if len(self.cal_img_ppm) == 0:
+            for e in self.elements.keys():
+                max_el = self.element_max[element]
+                self.cal_img_ppm[e] = self.np_images[e]*self.use_calibration( self.element_max[e], e, 'ppm' )
+                self.cal_img_mpo[e] = self.np_images[e]*self.use_calibration( self.element_max[e], e, 'mpo' )
+        return self.cal_img_ppm[element], self.cal_img_mpo[element]
 
     # selected_elements has to be a list of elements contained in the data.
     # e.g.: ['Na23', 'Mg24', 'Al27', 'K39']
@@ -251,11 +343,11 @@ class LA_ICP_MS_LOADER:
 
         self.pre_processed_images()
 
-        with napari.gui_qt():
-            viewer = napari.Viewer()
-            for i, element in enumerate(selected_elements):
-                new_layer = viewer.add_image(self.np_images[element], name='LA-ICP-MS [{}]'.format(self.elements[element]), scale=self.scaling, colormap=self.get_color_by_element(element), opacity=1/len(selected_elements), blending="additive", rendering="iso")
-            viewer.scale_bar.visible = True
+        #with napari.gui_qt():
+        viewer = napari.Viewer()
+        for i, element in enumerate(selected_elements):
+            new_layer = viewer.add_image(self.np_images[element], name='LA-ICP-MS [{}]'.format(self.elements[element]), scale=self.scaling, colormap=self.get_color_by_element(element), opacity=1/len(selected_elements), blending="additive", rendering="iso")
+        viewer.scale_bar.visible = True
 
     def __init__( self, settings ):
         # process input variables
@@ -285,10 +377,14 @@ class LA_ICP_MS_LOADER:
         if ( self.verbose ) : print( "Selected working directory: " + self.settings["workingDirectory"] )
 
         if os.path.isdir( self.settings["workingDirectory"] ) :
-            self.spot_distance_y = self.settings["spot_distance_y"]
             self.spot_distance_x = self.settings["spot_distance_x"]/(self.settings["stretch_x"] + 1)
+            self.spot_distance_y = self.settings["spot_distance_y"]
             # set basic variables containing all elements and their respective colors in the napari editor
             self.scaling = (self.spot_distance_y, self.spot_distance_x)
+
+            #self.pixel_scaling['x'] = self.spot_distance_x
+            #self.pixel_scaling['y'] = self.spot_distance_y
+            self.pixel_area = self.spot_distance_y * self.spot_distance_x
 
             # load data
             if self.settings["excel_file"] != '':
