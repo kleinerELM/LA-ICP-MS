@@ -302,6 +302,9 @@ class LA_ICP_MS_LOADER:
             for element in self.elements.keys():
                 self.np_images[element], self.element_max[element] = self.optimize_img( self.images[element] )
 
+    #def convert_tupe_to_mplt_color():
+
+
     def get_color_by_element(self, element, napari_cmap=True):
 
         i = list(self.elements.keys()).index(element)
