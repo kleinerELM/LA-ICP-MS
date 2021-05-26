@@ -24,12 +24,16 @@ usage: .\process_image.py [-h] [-o] [-r] [-x:] [-y:] [-d]
 
 ```
 
+# Jupyter notebook
+
+It is recommendet, to use the included jupyter notebook `laser.ipynb` for the analysis.
+
 # required thrid party packages
 
-This script was tested using Python 3.8.5
+This script was tested using Python 3.9.5
 
 This package requires some third-party-packages, which can be installed via pip using this command:
 
 ```
-pip install python-tk napari pandas matplotlib numpy scipy
+pip install -r requirements.txt
 ```
