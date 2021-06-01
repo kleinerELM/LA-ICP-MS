@@ -97,7 +97,8 @@ def get_element_from_isotope( isotope ):
 
 class LA_ICP_MS_LOADER:
     elements    = {} # list of elements in the raw data
-    images      = {} # raw signal data
+    raw_image   = {} # raw image data
+    images      = {} # smoothed signal data
     np_images   = {} # data as np images with a value range from 0-1
     cal_img_ppm = {} # image data calbirated as ppm
     cal_img_mpo = {} # image data calbirated as m.-% oxide
@@ -232,11 +233,14 @@ class LA_ICP_MS_LOADER:
         self.process_elements( line_data )
 
         for element in self.elements.keys():
-            if not element in self.images: self.images[element] = []
+            if not element in self.images:
+                self.images[element]    = []
+                self.raw_image[element] = []
             if self.settings["smooth_y"] > 0:
                 self.images[element].append( gaussian_filter1d(line_data[element].tolist(), self.settings["smooth_y"]) )
             else:
                 self.images[element].append( line_data[element].tolist() )
+            self.raw_image[element].append( line_data[element].tolist() )
 
     def load_excel( self ):
         xl = pd.ExcelFile(self.settings["excel_file"])
@@ -302,11 +306,7 @@ class LA_ICP_MS_LOADER:
             for element in self.elements.keys():
                 self.np_images[element], self.element_max[element] = self.optimize_img( self.images[element] )
 
-    #def convert_tupe_to_mplt_color():
-
-
     def get_color_by_element(self, element, napari_cmap=True):
-
         i = list(self.elements.keys()).index(element)
 
         if len(self.colormaps) < len(self.elements):
@@ -323,12 +323,14 @@ class LA_ICP_MS_LOADER:
 
         return cmap
 
-    def get_calibrated_images(self, element):
+    def get_calibrated_images(self, element, image=None):
+        if image is None:
+            image = self.np_images[element]
         if len(self.cal_img_ppm) == 0:
             for e in self.elements.keys():
                 max_el = self.element_max[element]
-                self.cal_img_ppm[e] = self.np_images[e]*self.use_calibration( self.element_max[e], e, 'ppm' )
-                self.cal_img_mpo[e] = self.np_images[e]*self.use_calibration( self.element_max[e], e, 'mpo' )
+                self.cal_img_ppm[e] = image * self.use_calibration( self.element_max[e], e, 'ppm' )
+                self.cal_img_mpo[e] = image * self.use_calibration( self.element_max[e], e, 'mpo' )
         return self.cal_img_ppm[element], self.cal_img_mpo[element]
 
     # selected_elements has to be a list of elements contained in the data.
@@ -395,8 +397,14 @@ class LA_ICP_MS_LOADER:
             else:
                 self.load_raw()
 
+            first_e = self.get_first_element()
+
+            #print(laser_data.np_images[element].shape[0] * laser_data.spot_distance_y  )
+            #print(laser_data.np_images[element].shape[1] * laser_data.spot_distance_x  )
+
+            self.image_dimensions = (len(self.images[first_e][0])*self.spot_distance_y, (len(self.images[first_e])*(self.settings["stretch_x"]+1)-self.settings["stretch_x"])*self.spot_distance_x, self.unit)
+
             if self.verbose:
-                first_e = self.get_first_element()
                 print('loaded a dataset with the dimensions of {} x {} datapoints and {} elements:'.format( len(self.images[first_e]), len(self.images[first_e][0]), len(self.images) ) )
                 print(list(self.elements.values()))
 

@@ -131,3 +131,5 @@ dmypy.json
 # result data
 processed/
 *.tif
+*.png
+*.svg
