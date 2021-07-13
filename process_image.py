@@ -100,8 +100,8 @@ class LA_ICP_MS_LOADER:
     raw_image   = {} # raw image data
     images      = {} # smoothed signal data
     np_images   = {} # data as np images with a value range from 0-1
-    cal_img_ppm = {} # image data calbirated as ppm
-    cal_img_mpo = {} # image data calbirated as m.-% oxide
+    cal_img_ppm = {} # image data calibrated as ppm
+    cal_img_mpo = {} # image data calibrated as m.-% oxide
     element_max = {} # max value in the data
     unit = 'µm'      # unit of the pixel dimensions
 
@@ -410,8 +410,6 @@ class LA_ICP_MS_LOADER:
 
         else:
             assert False, 'directory "{}" does not exist'.format( self.settings["workingDirectory"] )
-
-
 
 ### actual program start
 if __name__ == '__main__':
