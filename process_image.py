@@ -217,14 +217,17 @@ class LA_ICP_MS_LOADER:
         return new_img
 
     # change data format, the orientation of the image and remove 1% outliers
-    def optimize_img(self, img):
+    def optimize_img(self, img, remove_outliers=True):
         # in np array umwandeln und um 90° drehen
         np_img = np.rot90( np.flip( np.array(img), 0 ), 3 )
         element_max = np.percentile(np_img, 99)
+        if remove_outliers:
+            np_img = np.clip(np_img, 0, element_max)  / element_max
+
         #plt.hist(np_img.flatten(), bins = range(0,round(element_max[element]), 15))
         #plt.title("histogram {}".format(element))
         #plt.show()
-        np_img = np.clip(np_img, 0, element_max)  / element_max
+
         if self.settings["stretch_x"] > 0: np_img = self.strech_img( np_img )
 
         return np_img, element_max # normieren
@@ -300,6 +303,7 @@ class LA_ICP_MS_LOADER:
         plt.rcParams['figure.figsize'] = [12, 12]
         plt.title('results for {}'.format(self.elements[element]))
         plt.imshow(img, aspect=self.spot_distance_y/self.spot_distance_x, cmap='gray', interpolation=None)
+        return img
 
     def pre_processed_images(self):
         if len(self.np_images) == 0:
