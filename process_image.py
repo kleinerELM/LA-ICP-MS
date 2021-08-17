@@ -95,6 +95,11 @@ def get_oxide_portion( formula ):
 def get_element_from_isotope( isotope ):
     return re.split('(\d+)', isotope)[0]
 
+def get_isotope_abundance( isotope ):
+    iso_split = re.split('(\d+)', isotope)
+    return form(iso_split[1] + iso_split[0]).isotope.abundance
+
+
 class LA_ICP_MS_LOADER:
     elements    = {} # list of elements in the raw data
     raw_image   = {} # raw image data
