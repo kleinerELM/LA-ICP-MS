@@ -39,6 +39,11 @@ def getBaseSettings():
         # interpolate lines between the lines in x direction (linear interpolation)
         "stretch_x"            : 6,
         "load_raw"             : False,
+        "trim_top"             : 0,
+        "trim_bottom"          : 0,
+        "unit"                 : "µm",
+        "img_width"            : 0,
+        "img_height"           : 0,
         # extracted from a SEM image
         "spot_distance_x"      : 7.0,
         # extracted from the xlsx - is it constant?
@@ -101,7 +106,7 @@ def get_isotope_abundance( isotope ):
 
 
 class LA_ICP_MS_LOADER:
-    elements    = {} # list of elements in the raw data
+    elements    = {} # list of isotopes/elements in the raw data, e.g. { 'Na23': '²³Na',...}
     raw_image   = {} # raw image data
     images      = {} # smoothed signal data
     np_images   = {} # data as np images with a value range from 0-1
@@ -109,6 +114,11 @@ class LA_ICP_MS_LOADER:
     cal_img_mpo = {} # image data calibrated as m.-% oxide
     element_max = {} # max value in the data
     unit = 'µm'      # unit of the pixel dimensions
+
+    #new calibration variant based on ICP data
+    icp_based_calibration = True
+    icp = {}
+    cal_factor = {} # calibration factorarray
 
     # known oxides
     oxide_dict = {
@@ -129,7 +139,9 @@ class LA_ICP_MS_LOADER:
         'Cu': 'CuO',
         'Ni': 'NiO',
         'Pb': 'PbO',
-        'As': 'As2O3'
+        'As': 'As2O3',
+        'Si': 'SiO2',
+        'Fe': 'Fe2O3'
     }
 
     illegal_columns = ['ID', 'ID03', 'mp', 'µm', 'Time in Seconds '] + ['TB'] # TB contains some image data - but I do not know what exactly
@@ -163,6 +175,74 @@ class LA_ICP_MS_LOADER:
         selected_oxide = self.oxide_dict[ get_element_from_isotope( isotope ) ]
         return get_oxide_portion(selected_oxide)*self.cal_dict[isotope]*1000000
 
+    # accept a dictionary with values in m.-% (values from 0-100%)
+    # e.g.: icp_oes = { 'Ca': 64.81, ... }
+    def set_icp_oes_concentrations( self, icp_oes, verbose ):
+        found_el = 0
+        for isotope in self.elements.keys():
+            element = get_element_from_isotope( isotope )
+            if element in icp_oes:
+                self.icp[element] = icp_oes[element]/100
+                found_el += 1
+        if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp_oes)) )
+
+    # accepts a dictionary with values in [g/kg]
+    # e.g.: icp_oes = { 'Ca': 64.81, ... }
+    def set_icp_ms_concentrations( self, icp_ms, verbose ):
+        found_el = 0
+        for isotope in self.elements.keys():
+            element = get_element_from_isotope( isotope )
+            if element in icp_ms:
+                self.icp[element] = icp_ms[element] / get_oxide_portion( self.oxide_dict[element] ) / 1000
+                found_el += 1
+        if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp_ms)) )
+
+    def check_missing_elements_icp( self ):
+        missing_elements = []
+        for isotope in self.elements.keys():
+            element = get_element_from_isotope( isotope )
+            if not element in self.icp:
+                missing_elements.append( element )
+                self.icp[element] = 0
+        print('Missing elements in the ICP calibration data: {}'.format( ','.join(missing_elements) ))
+
+    def calculate_calibration_factors( self, icp_oes, icp_ms, verbose ):
+        self.set_icp_oes_concentrations( icp_oes, verbose )
+        self.set_icp_ms_concentrations( icp_ms, verbose )
+        self.check_missing_elements_icp( )
+
+        result_table = {}
+        for isotope in self.elements.keys():
+            element = get_element_from_isotope( isotope )
+
+            data_np = self.np_images[isotope]* self.element_max[isotope]
+            if element in self.icp and self.icp[element] > 0:
+                result_table[element] = self.icp[element]/data_np.mean()
+            else:
+                print("element {} missing".format(element))
+                result_table[element] = 0
+
+            self.cal_img_mpo[element] = data_np * result_table[element]
+
+        return self.cal_img_mpo
+
+    """
+    def get_calibrated_image(self, element, image=None):
+        if image is None: image = self.np_images[element]
+        e_max = self.element_max[element]
+        cal_img_ppm = image * self.use_calibration( e_max, element, 'ppm' )
+        cal_img_mpo = image * self.use_calibration( e_max, element, 'mpo' )
+
+        return cal_img_ppm, cal_img_mpo
+
+    def get_calibrated_images(self, element):
+        if len(self.cal_img_ppm) == 0:
+            for e in self.elements.keys():
+                self.cal_img_ppm[e], self.cal_img_mpo[e] = self.get_calibrated_image(element = e)
+
+        return self.cal_img_ppm[element], self.cal_img_mpo[element]
+    """
+
     # use the calibration matrix to get an 2D array with calibrated values for:
     #  mpo = mass-%-oxide
     #  ppm = parts per million
@@ -194,7 +274,7 @@ class LA_ICP_MS_LOADER:
 
         for isotope in cal_dict:
             if not get_element_from_isotope( isotope ) in self.oxide_dict:
-                print( 'Warning: The oxide of {} is not known! Please edit "process_image.py" first and add the oxide to the "oxide_dict" dictionary.' )
+                print( 'Warning: The oxide of {} is not known! Please edit "process_image.py" first and add the oxide to the "oxide_dict" dictionary.'.format(isotope) )
                 cal_dict.pop( isotope )
 
         self.cal_dict = cal_dict
@@ -222,7 +302,7 @@ class LA_ICP_MS_LOADER:
         return new_img
 
     # change data format, the orientation of the image and remove 1% outliers
-    def optimize_img(self, img, remove_outliers=True):
+    def optimize_img(self, img, remove_outliers=True, stretch=None):
         # in np array umwandeln und um 90° drehen
         np_img = np.rot90( np.flip( np.array(img), 0 ), 3 )
         element_max = np.percentile(np_img, 99)
@@ -232,8 +312,9 @@ class LA_ICP_MS_LOADER:
         #plt.hist(np_img.flatten(), bins = range(0,round(element_max[element]), 15))
         #plt.title("histogram {}".format(element))
         #plt.show()
-
-        if self.settings["stretch_x"] > 0: np_img = self.strech_img( np_img )
+        # init stretch variable and then interpolate the columns
+        if stretch is None or stretch < 0: stretch = self.settings["stretch_x"]
+        if stretch > 0: np_img = self.strech_img( np_img )
 
         return np_img, element_max # normieren
 
@@ -268,8 +349,18 @@ class LA_ICP_MS_LOADER:
             filename = os.fsdecode(file)
             if not '~lock' in filename and '.xl' in filename:
                 line_data  = pd.read_csv(self.settings["workingDirectory"] + filename, header=1)
+                if self.settings["trim_top"] < 0: self.settings["trim_top"] = 0
+                if self.settings["trim_bottom"] < 0: self.settings["trim_bottom"] = 0
+
+                if self.settings["trim_top"] > 0 or self.settings["trim_bottom"] > 0:
+                    if self.settings["trim_top"] + self.settings["trim_bottom"] < line_data.shape[0] :
+                        line_data = line_data.iloc[self.settings["trim_top"]:-self.settings["trim_bottom"] , :]
+                    else:
+                        print("Error! Trim values exceed the data length! Ignoring trim values.")
+
                 self.process_ls_icp_ms_line(line_data)
                 cnt += 1
+
 
         assert cnt != 0, "Did not find any *.xl file in '{}' !".format(self.settings["workingDirectory"])
 
@@ -310,7 +401,7 @@ class LA_ICP_MS_LOADER:
         plt.imshow(img, aspect=self.spot_distance_y/self.spot_distance_x, cmap='gray', interpolation=None)
         return img
 
-    def pre_processed_images(self):
+    def preprocess_images(self):
         if len(self.np_images) == 0:
             for element in self.elements.keys():
                 self.np_images[element], self.element_max[element] = self.optimize_img( self.images[element] )
@@ -332,22 +423,24 @@ class LA_ICP_MS_LOADER:
 
         return cmap
 
-    def get_calibrated_images(self, element, image=None):
-        if image is None:
-            image = self.np_images[element]
+    def get_calibrated_image(self, element, image=None):
+        if image is None: image = self.np_images[element]
+        e_max = self.element_max[element]
+        cal_img_ppm = image * self.use_calibration( e_max, element, 'ppm' )
+        cal_img_mpo = image * self.use_calibration( e_max, element, 'mpo' )
+
+        return cal_img_ppm, cal_img_mpo
+
+    def get_calibrated_images(self, element):
         if len(self.cal_img_ppm) == 0:
             for e in self.elements.keys():
-                max_el = self.element_max[element]
-                self.cal_img_ppm[e] = image * self.use_calibration( self.element_max[e], e, 'ppm' )
-                self.cal_img_mpo[e] = image * self.use_calibration( self.element_max[e], e, 'mpo' )
+                self.cal_img_ppm[e], self.cal_img_mpo[e] = self.get_calibrated_image(element = e)
+
         return self.cal_img_ppm[element], self.cal_img_mpo[element]
 
     # selected_elements has to be a list of elements contained in the data.
     # e.g.: ['Na23', 'Mg24', 'Al27', 'K39']
     def show_image_set( self, selected_elements = [] ):
-        np_images = {}
-        element_max = {}
-
         for element in selected_elements:
             if not element in self.elements.keys():
                 print('WARNING: {} does not exist in the dataset!')
@@ -391,14 +484,6 @@ class LA_ICP_MS_LOADER:
         if ( self.verbose ) : print( "Selected working directory: " + self.settings["workingDirectory"] )
 
         if os.path.isdir( self.settings["workingDirectory"] ) :
-            self.spot_distance_x = self.settings["spot_distance_x"]/(self.settings["stretch_x"] + 1)
-            self.spot_distance_y = self.settings["spot_distance_y"]
-            # set basic variables containing all elements and their respective colors in the napari editor
-            self.scaling = (self.spot_distance_y, self.spot_distance_x)
-
-            #self.pixel_scaling['x'] = self.spot_distance_x
-            #self.pixel_scaling['y'] = self.spot_distance_y
-            self.pixel_area = self.spot_distance_y * self.spot_distance_x
 
             # load data
             if self.settings["excel_file"] != '':
@@ -408,14 +493,35 @@ class LA_ICP_MS_LOADER:
 
             first_e = self.get_first_element()
 
+            if self.settings["img_width"] != 0 and self.settings["img_height"] != 0:
+                self.settings["spot_distance_x"] = self.settings["img_width"]  / len(self.images[first_e])
+                self.settings["spot_distance_y"] = self.settings["img_height"] / len(self.images[first_e][0])
+            else:
+                self.settings["img_width"]  = self.settings["spot_distance_x"] * len(self.images[first_e])
+                self.settings["img_height"] = self.settings["spot_distance_y"] * len(self.images[first_e][0])
+
+            self.spot_distance_x = self.settings["spot_distance_x"]/(self.settings["stretch_x"] + 1)
+            self.spot_distance_y = self.settings["spot_distance_y"]
+            self.unit = self.settings["unit"]
+            # set basic variables containing all elements and their respective colors in the napari editor
+            self.scaling = (self.spot_distance_y, self.spot_distance_x)
+
+            #self.pixel_scaling['x'] = self.spot_distance_x
+            #self.pixel_scaling['y'] = self.spot_distance_y
+            self.pixel_area = self.spot_distance_y * self.spot_distance_x
+
             #print(laser_data.np_images[element].shape[0] * laser_data.spot_distance_y  )
             #print(laser_data.np_images[element].shape[1] * laser_data.spot_distance_x  )
 
             self.image_dimensions = (len(self.images[first_e][0])*self.spot_distance_y, (len(self.images[first_e])*(self.settings["stretch_x"]+1)-self.settings["stretch_x"])*self.spot_distance_x, self.unit)
 
             if self.verbose:
-                print('loaded a dataset with the dimensions of {} x {} datapoints and {} elements:'.format( len(self.images[first_e]), len(self.images[first_e][0]), len(self.images) ) )
-                print(list(self.elements.values()))
+                print('successfully loaded the dataset:')
+                print('  raw dataset size: {} x {}'.format( len(self.images[first_e]), len(self.images[first_e][0]) ) )
+                print('  dimensions:       {:.2f} x {:.2f} {}'.format( self.settings["img_width"], self.settings["img_height"], self.unit ) )
+                print('  pixel dimension:  {:.4f} x {:.4f} {}'.format( self.settings["spot_distance_x"], self.settings["spot_distance_y"], self.unit ) )
+                print('  {:02d} elements:      {}'.format( len(self.images), ', '.join(list(self.elements.values()))  ))
+                print()
 
         else:
             assert False, 'directory "{}" does not exist'.format( self.settings["workingDirectory"] )
