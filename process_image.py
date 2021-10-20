@@ -14,6 +14,7 @@ from skimage import color
 import tkinter as tk
 from tkinter import filedialog
 from molmass import Formula as form
+import cv2
 
 def programInfo():
     print("#########################################################")
@@ -44,10 +45,10 @@ def getBaseSettings():
         "unit"                 : "µm",
         "img_width"            : 0,
         "img_height"           : 0,
-        # extracted from a SEM image
         "spot_distance_x"      : 7.0,
-        # extracted from the xlsx - is it constant?
-        "spot_distance_y"      : 0.579150579150579
+        "spot_distance_y"      : 0.579150579150579,
+        "do_phase_evaluation"  : False,
+        "phase_mask_path"      : ""
     }
     return settings
 
@@ -113,7 +114,13 @@ class LA_ICP_MS_LOADER:
     cal_img_ppm = {} # image data calibrated as ppm
     cal_img_mpo = {} # image data calibrated as m.-% oxide
     element_max = {} # max value in the data
-    unit = 'µm'      # unit of the pixel dimensions
+
+    unit        = 'µm' # unit of the pixel dimensions
+    phases      = [
+        'alite',
+        'belite',
+        'C4AF'
+    ]
 
     #new calibration variant based on ICP data
     icp_based_calibration = True
@@ -169,9 +176,9 @@ class LA_ICP_MS_LOADER:
                 else:
                     self.elements[element] = element
 
+    # get mass fraction of an element of its oxide
+    # e.g.: fraction of Na within Na2O
     def get_oxide_conc_factor( self, isotope ):
-        # Masseanteil am Oxide
-        # zb Anteil von Na an Na2O
         selected_oxide = self.oxide_dict[ get_element_from_isotope( isotope ) ]
         return get_oxide_portion(selected_oxide)*self.cal_dict[isotope]*1000000
 
@@ -197,6 +204,7 @@ class LA_ICP_MS_LOADER:
                 found_el += 1
         if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp_ms)) )
 
+    # find missing elements in the ICP calibration data to avoid crashing
     def check_missing_elements_icp( self ):
         missing_elements = []
         for isotope in self.elements.keys():
@@ -206,6 +214,7 @@ class LA_ICP_MS_LOADER:
                 self.icp[element] = 0
         print('Missing elements in the ICP calibration data: {}'.format( ','.join(missing_elements) ))
 
+    # calibrate the images to be able to calculate concentrations
     def calculate_calibration_factors( self, icp_oes, icp_ms, verbose ):
         self.set_icp_oes_concentrations( icp_oes, verbose )
         self.set_icp_ms_concentrations( icp_ms, verbose )
@@ -219,30 +228,70 @@ class LA_ICP_MS_LOADER:
             if element in self.icp and self.icp[element] > 0:
                 result_table[element] = self.icp[element]/data_np.mean()
             else:
-                print("element {} missing".format(element))
+                if verbose: print("element {} missing".format(element))
                 result_table[element] = 0
 
             self.cal_img_mpo[element] = data_np * result_table[element]
 
         return self.cal_img_mpo
 
-    """
-    def get_calibrated_image(self, element, image=None):
-        if image is None: image = self.np_images[element]
-        e_max = self.element_max[element]
-        cal_img_ppm = image * self.use_calibration( e_max, element, 'ppm' )
-        cal_img_mpo = image * self.use_calibration( e_max, element, 'mpo' )
+    # calculate the concentration of an element within a phase
+    # the phase has to be provided with binary images (white is the phase)
+    # the icp measurements have to be provided with dictionaries
+    # icp_oes (values in m.-% oxide)
+    #  e.g.: { 'Ca': 64.81, ... }
+    # icp_ms  (values in g/kg)
+    #  e.g.: { 'Ti':  1.431, ... }
+    def process_phase_evaluation( self, icp_oes, icp_ms ):
+        result_df = False
+        # get interpolated rawdata
+        if self.settings["do_phase_evaluation"] and os.path.isdir(self.settings["phase_mask_path"]):
+            # load calibration
+            la_icp_ms_element = self.calculate_calibration_factors( icp_oes, icp_ms, self.settings["showDebuggingOutput"] )
 
-        return cal_img_ppm, cal_img_mpo
+            # initiate pandas db
+            columns = []
+            for phase_mask in self.phases:
+                columns.append('c_' + phase_mask)
+                columns.append('c_err_' + phase_mask)
+            result_df = pd.DataFrame(columns = columns)
 
-    def get_calibrated_images(self, element):
-        if len(self.cal_img_ppm) == 0:
-            for e in self.elements.keys():
-                self.cal_img_ppm[e], self.cal_img_mpo[e] = self.get_calibrated_image(element = e)
+            for phase_mask in self.phases:
+                mask_img_path = self.settings["phase_mask_path"] + 'aligned' + phase_mask + '.png'
+                if os.path.isfile( mask_img_path ):
 
-        return self.cal_img_ppm[element], self.cal_img_mpo[element]
-    """
+                    #load calibrated values
+                    for isotope in self.np_images.keys():
+                        element = get_element_from_isotope( isotope )
+                        img = cv2.imread(mask_img_path , cv2.IMREAD_GRAYSCALE)
 
+                        # make sure the image is a mask
+                        _, thresh1 = cv2.threshold(img, 120, 255, cv2.THRESH_BINARY)
+
+                        # make the threshold binary
+                        mask = (thresh1/255).astype(int)
+
+                        # select pixel/values from the raw data
+                        selected_values = []
+                        for ix,iy in np.ndindex(mask.shape):
+                            if mask[ix, iy] == 1:
+                                selected_values.append(la_icp_ms_element[element][ix, iy]*100)
+                        selected_values = np.array(selected_values)
+                        result_df.at[element, 'c_'     + phase_mask] = selected_values.mean()
+                        result_df.at[element, 'c_err_' + phase_mask] = selected_values.std()
+                else:
+                    print("Mask image '{}' does not exist!".format(mask_img_path))
+            result_df.to_csv(self.settings["workingDirectory"] + self.settings["outputDirectory"] + '/phase_evaluation.csv')
+        else:
+            if not os.path.isdir(self.settings["phase_mask_path"]):
+                print('Phase mask path is not available!')
+            else:
+                print('Phase evaluation skipped!')
+
+            #display(HTML(result_df.to_html()))
+        return result_df
+
+    ### DEPRICATED
     # use the calibration matrix to get an 2D array with calibrated values for:
     #  mpo = mass-%-oxide
     #  ppm = parts per million
@@ -256,6 +305,7 @@ class LA_ICP_MS_LOADER:
 
         return calibrated_value
 
+    ### DEPRICATED
     # set the calibration dictionary
     def set_calibration_dictionary( self, cal_dict = None ):
         if not isinstance(cal_dict, dict):
@@ -385,18 +435,22 @@ class LA_ICP_MS_LOADER:
 
     def save_images( self ):
         if self.settings["outputDirectory"] != '':
-            if not os.path.isdir( self.settings["outputDirectory"] ):
-                os.mkdir( self.settings["outputDirectory"] )
-            if ( self.verbose ) : print( "Images will be stored in : "  + self.settings["outputDirectory"] )
+            out_dir = self.settings["workingDirectory"] + self.settings["outputDirectory"] + '/'
+            if not os.path.isdir( out_dir ):
+                os.mkdir( out_dir )
+            if self.verbose:
+                print( "Images will be stored in:" )
+                print( "  "  + out_dir )
             for element in self.elements.keys():
                 self.save_image_by_element( element )
         else:
-            if ( self.verbose ) : print( "Images won't be stored since no output directory is given!" )
+            if self.verbose:
+                print( "Images won't be stored since no output directory is given!" )
 
     def show_single_image( self, element=None ):
         if element is None: element = self.get_first_element()
         img, _ = self.optimize_img( self.images[element] )
-        plt.rcParams['figure.figsize'] = [12, 12]
+        plt.rcParams['figure.figsize'] = [8,8]
         plt.title('results for {}'.format(self.elements[element]))
         plt.imshow(img, aspect=self.spot_distance_y/self.spot_distance_x, cmap='gray', interpolation=None)
         return img
@@ -521,6 +575,9 @@ class LA_ICP_MS_LOADER:
                 print('  dimensions:       {:.2f} x {:.2f} {}'.format( self.settings["img_width"], self.settings["img_height"], self.unit ) )
                 print('  pixel dimension:  {:.4f} x {:.4f} {}'.format( self.settings["spot_distance_x"], self.settings["spot_distance_y"], self.unit ) )
                 print('  {:02d} elements:      {}'.format( len(self.images), ', '.join(list(self.elements.values()))  ))
+                print()
+                print('Known elements for calibration: ')
+                print('  {}'.format( ', '.join(self.oxide_dict) ) )
                 print()
 
         else:
