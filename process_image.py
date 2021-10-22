@@ -48,7 +48,8 @@ def getBaseSettings():
         "spot_distance_x"      : 7.0,
         "spot_distance_y"      : 0.579150579150579,
         "do_phase_evaluation"  : False,
-        "phase_mask_path"      : ""
+        "phase_mask_path"      : "",
+        "remove_background"    : False
     }
     return settings
 
@@ -109,6 +110,10 @@ def get_isotope_abundance( isotope ):
 class LA_ICP_MS_LOADER:
     elements    = {} # list of isotopes/elements in the raw data, e.g. { 'Na23': '²³Na',...}
     raw_image   = {} # raw image data
+    top_vals    = {} # cropped top signal
+    bottom_vals = {} # cropped bottom signal
+    top_mean    = {} # mean signal of top_vals
+    bottom_mean = {} # mean signal of bottom_vals
     images      = {} # smoothed signal data
     np_images   = {} # data as np images with a value range from 0-1
     cal_img_ppm = {} # image data calibrated as ppm
@@ -291,7 +296,7 @@ class LA_ICP_MS_LOADER:
             #display(HTML(result_df.to_html()))
         return result_df
 
-    ### DEPRICATED
+    ### DEPRECATED
     # use the calibration matrix to get an 2D array with calibrated values for:
     #  mpo = mass-%-oxide
     #  ppm = parts per million
@@ -305,7 +310,7 @@ class LA_ICP_MS_LOADER:
 
         return calibrated_value
 
-    ### DEPRICATED
+    ### DEPRECATED
     # set the calibration dictionary
     def set_calibration_dictionary( self, cal_dict = None ):
         if not isinstance(cal_dict, dict):
@@ -351,10 +356,23 @@ class LA_ICP_MS_LOADER:
 
         return new_img
 
+    def get_background(self, x, element, vector_len):
+        return ( self.bottom_mean[element] - self.top_mean[element] ) / vector_len * x + self.top_mean[element]
+
+
     # change data format, the orientation of the image and remove 1% outliers
-    def optimize_img(self, img, remove_outliers=True, stretch=None):
+    def optimize_img(self, img, element, remove_outliers=True, stretch=None):
+
+        np_img = np.array(img[element])
+
+        if self.settings["remove_background"] and len(self.top_mean) > 0:
+            f = np.vectorize(self.get_background)
+            vector_len = len(img[element][0])
+            background_vector = f(range(vector_len), element, vector_len)
+            np_img = (np_img-background_vector).clip(0)
+
         # in np array umwandeln und um 90° drehen
-        np_img = np.rot90( np.flip( np.array(img), 0 ), 3 )
+        np_img = np.rot90( np.flip( np_img, 0 ), 3 )
         element_max = np.percentile(np_img, 99)
         if remove_outliers:
             np_img = np.clip(np_img, 0, element_max)  / element_max
@@ -404,13 +422,26 @@ class LA_ICP_MS_LOADER:
 
                 if self.settings["trim_top"] > 0 or self.settings["trim_bottom"] > 0:
                     if self.settings["trim_top"] + self.settings["trim_bottom"] < line_data.shape[0] :
+                        top       = line_data.iloc[0:self.settings["trim_top"]-1, :]
+                        bottom    = line_data.iloc[-self.settings["trim_bottom"]+1: , :]
                         line_data = line_data.iloc[self.settings["trim_top"]:-self.settings["trim_bottom"] , :]
                     else:
                         print("Error! Trim values exceed the data length! Ignoring trim values.")
 
                 self.process_ls_icp_ms_line(line_data)
+
+                for element in self.elements.keys():
+                    if not element in self.top_vals:
+                        self.top_vals[element]    = []
+                        self.bottom_vals[element] = []
+                    self.top_vals[element].append( top[element].tolist() )
+                    self.bottom_vals[element].append( bottom[element].tolist() )
+
                 cnt += 1
 
+        for element in self.elements.keys():
+            self.top_mean[element] = np.array(self.top_vals[element]).mean()
+            self.bottom_mean[element] = np.array(self.bottom_vals[element]).mean()
 
         assert cnt != 0, "Did not find any *.xl file in '{}' !".format(self.settings["workingDirectory"])
 
@@ -418,7 +449,7 @@ class LA_ICP_MS_LOADER:
         if output_directory is None: output_directory = self.settings["outputDirectory"]
         assert output_directory != '', "no output directory given!"
 
-        img, _ = self.optimize_img( self.images[element] )
+        img, _ = self.optimize_img( self.images, element )
 
         # convert to 16 bit TIF
         img *= 65535
@@ -449,7 +480,7 @@ class LA_ICP_MS_LOADER:
 
     def show_single_image( self, element=None ):
         if element is None: element = self.get_first_element()
-        img, _ = self.optimize_img( self.images[element] )
+        img, _ = self.optimize_img( self.images, element )
         plt.rcParams['figure.figsize'] = [8,8]
         plt.title('results for {}'.format(self.elements[element]))
         plt.imshow(img, aspect=self.spot_distance_y/self.spot_distance_x, cmap='gray', interpolation=None)
@@ -458,7 +489,7 @@ class LA_ICP_MS_LOADER:
     def preprocess_images(self):
         if len(self.np_images) == 0:
             for element in self.elements.keys():
-                self.np_images[element], self.element_max[element] = self.optimize_img( self.images[element] )
+                self.np_images[element], self.element_max[element] = self.optimize_img( self.images, element )
 
     def get_color_by_element(self, element, napari_cmap=True):
         i = list(self.elements.keys()).index(element)
