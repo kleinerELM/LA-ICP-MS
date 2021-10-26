@@ -187,27 +187,45 @@ class LA_ICP_MS_LOADER:
         selected_oxide = self.oxide_dict[ get_element_from_isotope( isotope ) ]
         return get_oxide_portion(selected_oxide)*self.cal_dict[isotope]*1000000
 
-    # accept a dictionary with values in m.-% (values from 0-100%)
-    # e.g.: icp_oes = { 'Ca': 64.81, ... }
-    def set_icp_oes_concentrations( self, icp_oes, verbose ):
-        found_el = 0
-        for isotope in self.elements.keys():
-            element = get_element_from_isotope( isotope )
-            if element in icp_oes:
-                self.icp[element] = icp_oes[element]/100
-                found_el += 1
-        if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp_oes)) )
+    # accept a dictionary with concentrations
+    # e.g.: icp = { 'is_oxide_conc': True, 'unit' == 'm.-%', 'Ca': 64.81, ... }
+    # accepted units: ng/kg, mg/kg, g/kg, kg/kg, ppm, m.-%
+    def set_icp_concentrations( self, icp, verbose ):
+        assert "unit" in icp and "is_oxide_conc" in icp, "The calibration dictionary is missing the entries 'unit' or 'is_oxide_conc'!"
 
-    # accepts a dictionary with values in [g/kg]
-    # e.g.: icp_oes = { 'Ca': 64.81, ... }
-    def set_icp_ms_concentrations( self, icp_ms, verbose ):
+        # convert unit
+        unit_f = 1
+        if icp["unit"] == "ng/kg":
+            unit_f = 1000**3
+        if icp["unit"] == "mg/kg" or icp["unit"] == "ppm":
+            unit_f = 1000**2
+        elif icp["unit"] == "g/kg":
+            unit_f = 1000
+        elif icp["unit"] == "kg/kg":
+            unit_f = 1#1000*1000
+        elif icp["unit"] == "m.-%":
+            unit_f = 100
+
+        # copy elements to internal library
+        # and calculate oxide concentration in case it is not already
         found_el = 0
         for isotope in self.elements.keys():
             element = get_element_from_isotope( isotope )
-            if element in icp_ms:
-                self.icp[element] = icp_ms[element] / get_oxide_portion( self.oxide_dict[element] ) / 1000
+            if element in icp:
+
+                if icp["is_oxide_conc"]:
+                    conc  = icp[element] / unit_f
+                else:
+                    conc = icp[element] / unit_f / get_oxide_portion( self.oxide_dict[element] )
+
+                if element in self.icp.keys():
+                    print( "concentration of {} has already been set! {:.4f} g/kg will be replaced with {:.4f} g/kg (oxidic).".format(element, self.icp[element]*1000, conc*1000 ))
+
+                self.icp[element] = conc
+                element
                 found_el += 1
-        if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp_ms)) )
+
+        if verbose: print( '{} of {} elements in the ICP values are also present in the La-ICP-MS data'.format(found_el, len(icp)) )
 
     # find missing elements in the ICP calibration data to avoid crashing
     def check_missing_elements_icp( self ):
@@ -217,12 +235,21 @@ class LA_ICP_MS_LOADER:
             if not element in self.icp:
                 missing_elements.append( element )
                 self.icp[element] = 0
-        print('Missing elements in the ICP calibration data: {}'.format( ','.join(missing_elements) ))
+        if len(missing_elements) > 0: print('Missing elements in the ICP calibration data: {}'.format( ','.join(missing_elements) ))
 
     # calibrate the images to be able to calculate concentrations
-    def calculate_calibration_factors( self, icp_oes, icp_ms, verbose ):
-        self.set_icp_oes_concentrations( icp_oes, verbose )
-        self.set_icp_ms_concentrations( icp_ms, verbose )
+    def calculate_calibration_factors( self, icp, verbose ):
+        #self.set_icp_oes_concentrations( icp_oes, verbose )
+        #self.set_icp_ms_concentrations( icp_ms, verbose )
+
+        assert (isinstance(icp, dict) or isinstance(icp, list)), "The variable 'icp' is no ICP dict or a list of ICP dict and cannot be processed!"
+
+        if isinstance(icp, dict):
+            self.set_icp_concentrations( icp, verbose )
+        elif isinstance(icp, list):
+            for icp_item in icp:
+                self.set_icp_concentrations( icp_item, verbose )
+
         self.check_missing_elements_icp( )
 
         result_table = {}
@@ -247,12 +274,12 @@ class LA_ICP_MS_LOADER:
     #  e.g.: { 'Ca': 64.81, ... }
     # icp_ms  (values in g/kg)
     #  e.g.: { 'Ti':  1.431, ... }
-    def process_phase_evaluation( self, icp_oes, icp_ms ):
+    def process_phase_evaluation( self, icp_results ):
         result_df = False
         # get interpolated rawdata
         if self.settings["do_phase_evaluation"] and os.path.isdir(self.settings["phase_mask_path"]):
             # load calibration
-            la_icp_ms_element = self.calculate_calibration_factors( icp_oes, icp_ms, self.settings["showDebuggingOutput"] )
+            la_icp_ms_element = self.calculate_calibration_factors( icp_results, self.settings["showDebuggingOutput"] )
 
             # initiate pandas db
             columns = []
