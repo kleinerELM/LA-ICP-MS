@@ -1,15 +1,20 @@
 # 2D LA-ICP-MS
+
 Script to process 2D LA-ICP-MS data from TUM.
 
 It can process data structured as xlsx or can be provided as raw data. Examples can be found in the subfolder `example_data`.
 This package provides a python script and a jupyter file. While the jupyter file should be self-explanatory, the usage of the python file is explained in the help dialog:
 
 # direct script usage
+
+The direct usage of the processing script is possible but not endorsed.
+
+Help output:
 ```
 #########################################################
 # extract images from LA-ICP-MS data by TUM             #
 #                                                       #
-# © 2021 Florian Kleiner                                #
+# © 2022 Florian Kleiner                                #
 #   Bauhaus-Universität Weimar                          #
 #   Finger-Institut für Baustoffkunde                   #
 #                                                       #
@@ -46,3 +51,11 @@ This package requires some third-party-packages, which can be installed via pip 
 ```
 pip install -r requirements.txt
 ```
+
+# citation
+
+this script is published together with the paper _Combined LA-ICP-MS and SEM-EDX analyses for spatially resolved major minor and trace element detection in cement clinker phases, Cement and Concrete Research_
+
+cite as following:
+
+Florian Kleiner, Marco Decker, Christiane Rößler, Harald Hilbig, Horst-Michael Ludwig, _Combined LA-ICP-MS and SEM-EDX analyses for spatially resolved major minor and trace element detection in cement clinker phases, Cement and Concrete Research_, 2022, doi: [10.1016/j.cemconres.2022.106875](https://doi.org/10.1016/j.cemconres.2022.106875)

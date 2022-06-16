@@ -20,7 +20,7 @@ def programInfo():
     print("#########################################################")
     print("# extract images from LA-ICP-MS data by TUM             #")
     print("#                                                       #")
-    print("# © 2021 Florian Kleiner                                #")
+    print("# © 2022 Florian Kleiner                                #")
     print("#   Bauhaus-Universität Weimar                          #")
     print("#   Finger-Institut für Baustoffkunde                   #")
     print("#                                                       #")
