@@ -42,6 +42,10 @@ Use a SEM image acquired after the LA-ICP-MS ablation and measure the outer dime
 To combine an EDX segmentation with the LA-ICP-MS Data, the binary image has to be transformed to the orientation and dimensions of the LA-ICP-MS dataset.
 In the example data, the images were combined using SEM images before and after the LA-ICP-MS ablation.
 
+## phase map alignment
+
+There is an alignment exaplme in the `example_data` folder. This will be polished in the future.
+
 # required thrid party packages
 
 This script was tested using Python 3.9.5

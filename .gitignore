@@ -130,6 +130,6 @@ dmypy.json
 
 # result data
 processed/
-*.tif
-*.png
 *.svg
+edx_alit.tif
+edx_belit.tif
